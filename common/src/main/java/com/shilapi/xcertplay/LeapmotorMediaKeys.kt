@@ -1,11 +1,17 @@
 package com.shilapi.xcertplay
 
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.ServiceConnection
+import android.media.AudioManager
+import android.os.Binder
 import android.os.Handler
+import android.os.IBinder
 import android.os.Looper
+import android.os.Parcel
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import com.shilapi.xcertplay.airplay.CarPlayMediaButton
@@ -54,6 +60,8 @@ internal object LeapmotorMediaProtocol {
         "com.leapmotor.customkey.media.pauseplay",
         "com.leapmotor.customkey.music.next",
         "com.leapmotor.customkey.music.prev",
+        "com.leapmotor.steerwheelcontrol.media",
+        "com.leapmotor.steerwheelcontrolservice.action",
     )
 
     /**
@@ -224,6 +232,7 @@ internal object LeapmotorMediaKeys {
             )
         }.isSuccess
         receiver = created.takeIf { registered }
+        bindSteerWheelService(context.applicationContext)
         report("media keys listening on ${LeapmotorMediaProtocol.ACTIONS.size} actions registered=$registered")
     }
 
@@ -234,6 +243,9 @@ internal object LeapmotorMediaKeys {
         val existing = receiver
         if (context != null && existing != null) {
             runCatching { context.unregisterReceiver(existing) }
+        }
+        if (context != null) {
+            unbindSteerWheelService(context)
         }
         receiver = null
         appContext = null
@@ -262,6 +274,10 @@ internal object LeapmotorMediaKeys {
                 val mapped = LeapmotorMediaProtocol.c11ChannelAction(intent)
                 if (mapped != null) dispatch(mapped, action)
                 else report("media key c11-channel unmatched action=$action extras=[${LeapmotorMediaProtocol.extraChannelDetail(intent)}]")
+            }
+            action == "com.leapmotor.steerwheelcontrol.media" -> {
+                val code = intent.getIntExtra("action", -1)
+                handleRawActionCode(code, "leapmotor-steerwheel-broadcast")
             }
             else -> {
                 val fromPayload = LeapmotorMediaProtocol.actionFromPayload(
@@ -317,6 +333,129 @@ internal object LeapmotorMediaKeys {
         val sent = controller.sendMediaButton(button)
         report("media key source=$source action=$trimmed -> CarPlay $button sent=$sent")
         return sent
+    }
+
+    private var serviceConnection: ServiceConnection? = null
+    private var serviceBinder: IBinder? = null
+    private var callbackRegistered = false
+
+    private val callbackBinder = object : Binder() {
+        init {
+            attachInterface(null, "com.leapmotor.volumecontrol.ISteerWheelControl")
+        }
+
+        override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
+            if (code == IBinder.INTERFACE_TRANSACTION) {
+                reply?.writeString("com.leapmotor.volumecontrol.ISteerWheelControl")
+                return true
+            } else if (code == 1) {
+                data.enforceInterface("com.leapmotor.volumecontrol.ISteerWheelControl")
+                val action = data.readInt()
+                mainHandler.post { handleRawActionCode(action, "leapmotor-steerwheel-binder") }
+                reply?.writeNoException()
+                return true
+            }
+            return super.onTransact(code, data, reply, flags)
+        }
+    }
+
+    private fun bindSteerWheelService(context: Context) {
+        if (serviceConnection != null) return
+        val conn = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+                serviceBinder = service
+                report("SteerWheelControlService connected")
+                if (service != null) {
+                    val data = Parcel.obtain()
+                    val reply = Parcel.obtain()
+                    try {
+                        data.writeInterfaceToken("com.leapmotor.volumecontrol.ISteerWheelControlService")
+                        data.writeStrongBinder(callbackBinder)
+                        service.transact(1, data, reply, 0)
+                        reply.readException()
+                        callbackRegistered = true
+                        report("registered ISteerWheelControl callback via Binder")
+                    } catch (e: Exception) {
+                        report("failed to register ISteerWheelControl callback: ${e.message}")
+                    } finally {
+                        data.recycle()
+                        reply.recycle()
+                    }
+                }
+            }
+
+            override fun onServiceDisconnected(name: ComponentName?) {
+                report("SteerWheelControlService disconnected")
+                serviceBinder = null
+                callbackRegistered = false
+            }
+        }
+        serviceConnection = conn
+        val intent = Intent("com.leapmotor.steerwheelcontrolservice.action").apply {
+            component = ComponentName("com.leapmotor.volumecontrol", "com.leapmotor.volumecontrol.service.SteerWheelControlService")
+        }
+        val bound = runCatching {
+            context.bindService(intent, conn, Context.BIND_AUTO_CREATE)
+        }.getOrDefault(false)
+        report("bindSteerWheelService bound=$bound")
+    }
+
+    private fun unbindSteerWheelService(context: Context) {
+        val conn = serviceConnection ?: return
+        val binder = serviceBinder
+        if (binder != null && callbackRegistered) {
+            val data = Parcel.obtain()
+            val reply = Parcel.obtain()
+            try {
+                data.writeInterfaceToken("com.leapmotor.volumecontrol.ISteerWheelControlService")
+                data.writeStrongBinder(callbackBinder)
+                binder.transact(2, data, reply, 0)
+                reply.readException()
+            } catch (_: Exception) {}
+            finally {
+                data.recycle()
+                reply.recycle()
+            }
+        }
+        callbackRegistered = false
+        serviceBinder = null
+        serviceConnection = null
+        runCatching { context.unbindService(conn) }
+        report("unbindSteerWheelService done")
+    }
+
+    private fun handleRawActionCode(code: Int, source: String) {
+        when (code) {
+            1 -> dispatchButton(CarPlayMediaButton.NEXT, source)
+            4 -> dispatchButton(CarPlayMediaButton.PREVIOUS, source)
+            7 -> dispatchButton(CarPlayMediaButton.PLAY_PAUSE, source)
+            10 -> adjustVolume(1, source)
+            11 -> adjustVolume(-1, source)
+            else -> report("unhandled raw action code=$code from $source")
+        }
+    }
+
+    fun dispatchButton(button: Int, source: String): Boolean {
+        val ctrl = controller ?: return false
+        if (!claimDispatchWindow(button)) {
+            report("media key duplicate suppressed button=$button from $source")
+            return false
+        }
+        if (CarPlayVideo.onMediaKey(button)) {
+            report("media key from $source button=$button -> video player")
+            return true
+        }
+        val sent = ctrl.sendMediaButton(button)
+        report("media key from $source button=$button -> CarPlay sent=$sent")
+        return sent
+    }
+
+    fun adjustVolume(delta: Int, source: String) {
+        val audio = appContext?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        runCatching {
+            audio.adjustSuggestedStreamVolume(delta, AudioManager.USE_DEFAULT_STREAM_TYPE, AudioManager.FLAG_SHOW_UI)
+            report("volume adjusted by $delta from $source")
+        }
     }
 
     private fun report(message: String) {

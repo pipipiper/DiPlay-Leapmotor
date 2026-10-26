@@ -14,10 +14,12 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.shihab.diplay"
+        applicationId = providers.environmentVariable("DIPLAY_APPLICATION_ID")
+            .getOrElse("com.shihab.diplay")
         minSdk = 25
         targetSdk = 37
-        versionCode = 39
+        versionCode = providers.environmentVariable("DIPLAY_VERSION_CODE")
+            .orNull?.toInt() ?: 39
         versionName = "0.2.20"
 
     }
@@ -34,6 +36,8 @@ android {
             storePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").getOrElse("")
             keyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").getOrElse("")
             keyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD").getOrElse("")
+            enableV1Signing = true
+            enableV2Signing = true
         }
     }
 

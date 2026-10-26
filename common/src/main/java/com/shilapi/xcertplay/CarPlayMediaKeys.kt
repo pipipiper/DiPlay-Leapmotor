@@ -149,6 +149,7 @@ internal object CarPlayMediaKeys {
                 // to every media listener, and on a DiLink 5.0 Tang that exhausted memory within
                 // minutes. The position goes in the playback state.
                 if (metadataChanged) session?.setMetadata(androidMetadata(update, shownArtworkLocked()))
+                LeapmotorMediaPublisher.publish(appContext, update)
                 publishPlaybackStateLocked()
             }
         }
@@ -301,7 +302,8 @@ internal object CarPlayMediaKeys {
                 if (it) forwardGrantedFocusLocked()
             }
         }
-        session = MediaSession(context, "DiPlay CarPlay").apply {
+        val sessionTag = if (LeapmotorMediaPublisher.isLeapmotor(context)) "HiCar" else "DiPlay CarPlay"
+        session = MediaSession(context, sessionTag).apply {
             setCallback(callback, mainHandler)
             setMetadata(androidMetadata(nowPlaying, shownArtworkLocked()))
             isActive = true
@@ -361,6 +363,7 @@ internal object CarPlayMediaKeys {
         artwork = null
         artworkCache.clear()
         ClusterMusicState.publish(CarPlayNowPlaying(), null)
+        LeapmotorMediaPublisher.clear(appContext)
         focusRequest?.let { request -> appContext?.getSystemService(AudioManager::class.java)?.let(request::abandon) }
         focusRequest = null
         focusHeld = false
@@ -385,6 +388,7 @@ internal object CarPlayMediaKeys {
                 )
                 .build(),
         )
+        LeapmotorMediaPublisher.publish(appContext, nowPlaying.copy(playing = playing))
     }
 
     private fun send(index: Int, source: String) {
@@ -430,7 +434,8 @@ internal object CarPlayMediaKeys {
             }
             info.album?.let { putString(MediaMetadata.METADATA_KEY_ALBUM, it) }
             info.durationMillis?.let { putLong(MediaMetadata.METADATA_KEY_DURATION, it) }
-            info.sourceApp?.let { putString(MediaMetadata.METADATA_KEY_DISPLAY_DESCRIPTION, it) }
+            val description = if (LeapmotorMediaPublisher.isLeapmotor(appContext)) "HiCar" else info.sourceApp
+            description?.let { putString(MediaMetadata.METADATA_KEY_DISPLAY_DESCRIPTION, it) }
             artwork?.let {
                 putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, it)
                 putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, it)
