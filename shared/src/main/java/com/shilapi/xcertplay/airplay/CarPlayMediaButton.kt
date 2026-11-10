@@ -99,7 +99,7 @@ object CarPlayMediaButton {
         "pause", "stop" -> PAUSE
         "playpause", "pauseplay", "toggleplay", "toggleplaypause", "play_pause" -> PLAY_PAUSE
         "next", "nextone", "nexttrack" -> NEXT
-        "prev", "preone", "previous", "previoustrack" -> PREVIOUS
+        "prev", "previous", "preone", "previoustrack" -> PREVIOUS
         else -> null
     }
 
@@ -112,7 +112,7 @@ object CarPlayMediaButton {
      */
     fun isWheelAction(raw: String?): Boolean = when (raw?.trim()?.lowercase(Locale.ROOT)) {
         "toggleplaypause", "play_pause", "nextone", "nexttrack", "pauseplay",
-        "prev", "next", "previoustrack", "toggleplay", "preone", "previous", "playpause",
+        "prev", "next", "previous", "previoustrack", "toggleplay", "preone", "playpause",
         -> true
         else -> false
     }

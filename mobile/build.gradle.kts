@@ -16,11 +16,11 @@ android {
     defaultConfig {
         applicationId = providers.environmentVariable("DIPLAY_APPLICATION_ID")
             .getOrElse("com.shihab.diplay")
-        minSdk = 25
+        minSdk = 24
         targetSdk = 37
         versionCode = providers.environmentVariable("DIPLAY_VERSION_CODE")
-            .orNull?.toInt() ?: 39
-        versionName = "0.2.20"
+            .orNull?.toInt() ?: 41
+        versionName = "0.2.22"
 
     }
 
